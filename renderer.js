@@ -1,5 +1,5 @@
-const crypto = require('crypto');
-const https = require('https');
+// FIX: require('crypto') kaldırıldı, window.crypto.subtle kullanıldı
+// FIX: https.request kaldırıldı, fetch API kullanıldı
 
 // ====================== TAB SİSTEMİ ======================
 function switchTab(tab) {
@@ -9,6 +9,26 @@ function switchTab(tab) {
     document.querySelectorAll('.tab-content').forEach((c, i) => {
         c.style.display = i === tab ? 'block' : 'none';
     });
+}
+
+// ====================== SHA-256 HASH (Web Crypto API) ======================
+async function sha256Hash(password) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(password);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashHex;
+}
+
+// ====================== SHA-1 HASH (HIBP için) ======================
+async function sha1Hash(password) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(password);
+    const hashBuffer = await crypto.subtle.digest('SHA-1', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashHex.toUpperCase();
 }
 
 // ====================== ŞİFRE ANALİZ ======================
@@ -36,8 +56,11 @@ function analyzePassword(pass) {
     if (commonPasswords.includes(pass.toLowerCase())) warnings.push("Çok yaygın bir şifre!");
     if (/(.)\1{2,}/.test(pass)) warnings.push("Tekrar eden karakterler var.");
 
-    const entropy = Math.log2(Math.pow(charsetSize || 62, pass.length) || 1);
-    const seconds = Math.pow(charsetSize || 62, pass.length) / 1e10;
+    // charsetSize en az 1 olsun
+    if (charsetSize === 0) charsetSize = 26;
+    
+    const entropy = Math.log2(Math.pow(charsetSize, pass.length));
+    const seconds = Math.pow(charsetSize, pass.length) / 1e10;
 
     return { score: Math.min(score, 5), entropy: entropy.toFixed(1), secondsToCrack: seconds, warnings };
 }
@@ -58,6 +81,7 @@ function updateUI(analysis) {
 }
 
 function formatTime(seconds) {
+    if (isNaN(seconds) || seconds === Infinity) return "∞ (neredeyse imkansız)";
     if (seconds < 60) return Math.floor(seconds) + " saniye";
     if (seconds < 3600) return Math.floor(seconds / 60) + " dakika";
     if (seconds < 86400) return Math.floor(seconds / 3600) + " saat";
@@ -72,21 +96,25 @@ function resetUI() {
     hashValue.innerText = "Henüz veri yok...";
 }
 
-// Şifre girişi
+// Şifre girişi (Async hash hesaplama ile)
 if (passInput) {
-    passInput.addEventListener('input', () => {
+    passInput.addEventListener('input', async () => {
         const password = passInput.value;
         if (password.length === 0) {
             resetUI();
             return;
         }
 
-        const hash = crypto.createHash('sha256').update(password).digest('hex');
+        // FIX: Web Crypto API ile hash hesapla
+        const hash = await sha256Hash(password);
         hashValue.innerText = hash;
 
         const analysis = analyzePassword(password);
         updateUI(analysis);
     });
+    
+    // FIX: autofocus sorunu için
+    passInput.focus();
 }
 
 // ====================== ŞİFRE ÜRET ======================
@@ -116,14 +144,14 @@ function generatePassword() {
 
 function copyGenerated() {
     const text = document.getElementById('generatedPass').innerText;
-    if (text) {
+    if (text && text !== "Henüz şifre üretilmedi") {
         navigator.clipboard.writeText(text);
         alert('Şifre kopyalandı!');
     }
 }
 
-// ====================== HIBP (Node.js ile) ======================
-function checkHIBP() {
+// ====================== HIBP (Fetch API ile) ======================
+async function checkHIBP() {
     const password = document.getElementById('hibpInput').value.trim();
     const resultDiv = document.getElementById('hibpResult');
 
@@ -135,40 +163,34 @@ function checkHIBP() {
     resultDiv.innerHTML = `<span style="color:orange">Sorgulanıyor...</span>`;
 
     try {
-        const hash = crypto.createHash('sha1').update(password).digest('hex').toUpperCase();
+        // FIX: Web Crypto API ile SHA-1 hash hesapla
+        const hash = await sha1Hash(password);
         const prefix = hash.substring(0, 5);
         const suffix = hash.substring(5);
 
-        const options = {
-            hostname: 'api.pwnedpasswords.com',
-            path: `/range/${prefix}`,
-            method: 'GET',
+        // FIX: fetch API kullan (https.request yerine)
+        const response = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
             headers: { 'User-Agent': 'SecurityLab' }
-        };
-
-        const req = https.request(options, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                const found = data.split('\n').some(line => {
-                    const [hashSuffix] = line.split(':');
-                    return hashSuffix === suffix;
-                });
-
-                if (found) {
-                    resultDiv.innerHTML = `<span style="color:#f44336">⚠️ Bu şifre veritabanında bulundu! Lütfen değiştirin.</span>`;
-                } else {
-                    resultDiv.innerHTML = `<span style="color:#4caf50">✅ Bu şifre HIBP'ta görünmüyor.</span>`;
-                }
-            });
         });
 
-        req.on('error', () => {
-            resultDiv.innerHTML = `<span style="color:orange">Bağlantı hatası. İnternet kontrol edin.</span>`;
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.text();
+        const found = data.split('\n').some(line => {
+            const [hashSuffix] = line.split(':');
+            return hashSuffix === suffix;
         });
-        req.end();
+
+        if (found) {
+            resultDiv.innerHTML = `<span style="color:#f44336">⚠️ Bu şifre veritabanında bulundu! Lütfen değiştirin.</span>`;
+        } else {
+            resultDiv.innerHTML = `<span style="color:#4caf50">✅ Bu şifre HIBP'ta görünmüyor.</span>`;
+        }
     } catch (e) {
-        resultDiv.innerHTML = `<span style="color:red">Hata oluştu.</span>`;
+        console.error('HIBP hatası:', e);
+        resultDiv.innerHTML = `<span style="color:orange">Bağlantı hatası. İnternet bağlantınızı kontrol edin.</span>`;
     }
 }
 
