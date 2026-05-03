@@ -8,14 +8,15 @@ function createWindow() {
     backgroundColor: '#1e1e1e',
     title: "Security Lab: Advanced Analyzer",
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-      sandbox: false
+      nodeIntegration: false,      // FIX: Güvenlik için false
+      contextIsolation: true,      // FIX: Güvenlik için true
+      sandbox: true,               // FIX: Güvenlik için true
+      preload: path.join(__dirname, 'preload.js')  // FIX: Preload eklendi
     }
   });
 
   win.loadFile('index.html');
-  // win.webContents.openDevTools(); // Hata ayıklamak istersen burayı açabilirsin
+  // win.webContents.openDevTools();
 }
 
 app.whenReady().then(createWindow);
